@@ -14,6 +14,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 import pickle
+import requests
+import tempfile
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,33 +29,85 @@ PREPROCESSORS = {}
 FEATURE_ORDERS = {}
 EXPECTED_FEATURES = {}
 
-# Model paths (adjust these paths based on your model locations)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, '..', 'models')
+BASE_R2_URL = "https://pub-91c0362780d94d118120d810e0311f96.r2.dev"
 
 MODEL_PATHS = {
-    "diabetes": os.path.join(MODELS_DIR, "diabetes_best_model.pkl"),
-    "heart_disease": os.path.join(MODELS_DIR, "heart_disease_random_forest_model.pkl"),
-    "kidney_disease": os.path.join(MODELS_DIR, "kidney_disease_gradient_boosting_model.pkl"),
-    "liver_disease": os.path.join(MODELS_DIR, "liver_disease_pipeline.pkl"),  # already includes preprocessor
-    "breast_cancer": os.path.join(MODELS_DIR, "breast_cancer_svm_model.pkl"),
-    "covid_symptoms": os.path.join(MODELS_DIR, "covid19_rf_model.pkl"),
-    "pneumonia_image": os.path.join(MODELS_DIR, "pneumonia_detection_model.h5"),
-    "covid_image": os.path.join(MODELS_DIR, "covid19_detection_model.h5"),
-    'unified_multimodal': os.path.join(MODELS_DIR, "unified_multimodal_model.h5"),
+    "diabetes": f"{BASE_R2_URL}/diabetes_best_model.pkl",
+    "heart_disease": f"{BASE_R2_URL}/heart_disease_random_forest_model.pkl",
+    "kidney_disease": f"{BASE_R2_URL}/kidney_disease_best_model.pkl",
+    "liver_disease": f"{BASE_R2_URL}/liver_disease_pipeline.pkl",  # already includes preprocessor
+    "breast_cancer": f"{BASE_R2_URL}/breast_cancer_svm_model.pkl",
+    "covid_symptoms": f"{BASE_R2_URL}/covid19_rf_model.pkl",
+    "pneumonia_image": f"{BASE_R2_URL}/simpleCNN_pneumonia.h5",
+    "covid_image": f"{BASE_R2_URL}/X_ray_covid19_detection_model.h5",
+    "unified_multimodal": f"{BASE_R2_URL}/unified_multimodal_model.h5",
 }
 
 PREPROCESSOR_PATHS = {
-    "diabetes": os.path.join(MODELS_DIR, "diabetes_preprocessor.pkl"),
-    "heart_disease": os.path.join(MODELS_DIR, "heart_disease_preprocessor.pkl"),
-    "kidney_disease": os.path.join(MODELS_DIR, "kidney_disease_preprocessor.pkl"),
-    "breast_cancer": os.path.join(MODELS_DIR, "breast_cancer_preprocessor.pkl"),
+    "diabetes": f"{BASE_R2_URL}/diabetes_preprocessor.pkl",
+    "heart_disease": f"{BASE_R2_URL}/heart_disease_preprocessor.pkl",
+    "kidney_disease": f"{BASE_R2_URL}/kidney_disease_preprocessor.pkl",
+    "breast_cancer": f"{BASE_R2_URL}/breast_cancer_preprocessor.pkl",
 }
 
 FEATURE_ORDER_PATHS = {
-    "covid_symptoms": os.path.join(MODELS_DIR, "covid19_feature_order.pkl"),
-    "breast_cancer": os.path.join(MODELS_DIR, "breast_cancer_feature_order.pkl"),
+    "covid_symptoms": f"{BASE_R2_URL}/covid19_feature_order.pkl",
+    "breast_cancer": f"{BASE_R2_URL}/breast_cancer_feature_order.pkl",
 }
+
+import os
+import tempfile
+import requests
+import joblib
+import tensorflow as tf
+import logging
+
+logger = logging.getLogger(__name__)
+
+def load_file(path, is_keras=False):
+    """
+    Load a model or file from either R2 (HTTP/HTTPS) or local filesystem.
+
+    Args:
+        path (str): Path or URL of the file.
+        is_keras (bool): True if loading a Keras model (.h5/.keras), else joblib.
+
+    Returns:
+        Loaded object (Keras model or joblib object), or None on failure.
+    """
+    try:
+        if path.startswith("http"):  # 🔗 Remote (R2) file
+            resp = requests.get(path, stream=True)
+            resp.raise_for_status()
+
+            # Save to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".h5" if is_keras else ".pkl") as tmp:
+                tmp.write(resp.content)
+                tmp_path = tmp.name
+
+            # Load model
+            obj = tf.keras.models.load_model(tmp_path) if is_keras else joblib.load(tmp_path)
+
+            # ✅ Cleanup temp file
+            os.unlink(tmp_path)
+
+            logger.info(f"Loaded remote file successfully: {path}")
+            return obj
+
+        else:  # 📂 Local file
+            if not os.path.exists(path):
+                logger.warning(f"Local file not found: {path}")
+                return None
+
+            obj = tf.keras.models.load_model(path) if is_keras else joblib.load(path)
+            logger.info(f"Loaded local file successfully: {path}")
+            return obj
+
+    except Exception as e:
+        logger.error(f"Failed to load file {path}: {e}")
+        return None
+
+# Model paths (adjust these paths based on your model locations)
 
 
 def create_mock_model_and_preprocessor(disease_type, feature_names):
@@ -87,11 +141,11 @@ def create_mock_model_and_preprocessor(disease_type, feature_names):
         logger.error(f"Error creating mock model for {disease_type}: {str(e)}")
         return None, None
 
+
 def load_models():
-    """Load all available models and preprocessors"""
+    """Load all available models and preprocessors directly from R2 or local"""
     global MODELS, PREPROCESSORS, FEATURE_ORDERS
-    
-    # Define expected features for each disease
+
     EXPECTED_FEATURES = {
         'diabetes': ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness', 
                     'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age'],
@@ -105,108 +159,62 @@ def load_models():
                          'Aspartate_Aminotransferase', 'Total_Protiens', 'Albumin', 
                          'Albumin_and_Globulin_Ratio'],
         'breast_cancer': [
-                        'radius_mean', 'texture_mean', 'perimeter_mean', 'area_mean',
-                        'smoothness_mean', 'compactness_mean', 'concavity_mean',
-                        'concave_points_mean', 'symmetry_mean', 'fractal_dimension_mean',
-                        'radius_se', 'texture_se', 'perimeter_se', 'area_se',
-                        'smoothness_se', 'compactness_se', 'concavity_se',
-                        'concave_points_se', 'symmetry_se', 'fractal_dimension_se',
-                        'radius_worst', 'texture_worst', 'perimeter_worst', 'area_worst',
-                        'smoothness_worst', 'compactness_worst', 'concavity_worst',
-                        'concave_points_worst', 'symmetry_worst', 'fractal_dimension_worst'
-                    ],
+            'radius_mean', 'texture_mean', 'perimeter_mean', 'area_mean',
+            'smoothness_mean', 'compactness_mean', 'concavity_mean',
+            'concave_points_mean', 'symmetry_mean', 'fractal_dimension_mean',
+            'radius_se', 'texture_se', 'perimeter_se', 'area_se',
+            'smoothness_se', 'compactness_se', 'concavity_se',
+            'concave_points_se', 'symmetry_se', 'fractal_dimension_se',
+            'radius_worst', 'texture_worst', 'perimeter_worst', 'area_worst',
+            'smoothness_worst', 'compactness_worst', 'concavity_worst',
+            'concave_points_worst', 'symmetry_worst', 'fractal_dimension_worst'
+        ],
         'covid_symptoms': [
-                            "breathing_problem", "fever", "dry_cough", "sore_throat",
-                            "running_nose", "asthma", "chronic_lung_disease", "headache",
-                            "heart_disease", "diabetes", "hyper_tension", "fatigue",
-                            "gastrointestinal", "abroad_travel", "contact_with_covid_patient",
-                            "attended_large_gathering", "visited_public_exposed_places",
-                            "family_working_public_places", "wearing_masks",
-                            "sanitization_from_market"
-                        ]
+            "breathing_problem", "fever", "dry_cough", "sore_throat",
+            "running_nose", "asthma", "chronic_lung_disease", "headache",
+            "heart_disease", "diabetes", "hyper_tension", "fatigue",
+            "gastrointestinal", "abroad_travel", "contact_with_covid_patient",
+            "attended_large_gathering", "visited_public_exposed_places",
+            "family_working_public_places", "wearing_masks",
+            "sanitization_from_market"
+        ]
     }
-    
- # Load tabular models
-# Load models
-# ✅ Load all models
-for disease, path in MODEL_PATHS.items():
-    if disease.endswith("_image"):
-        continue
 
-    try:
-        if disease == "liver_disease":
-            if os.path.exists(path):
-                MODELS[disease] = joblib.load(path)
-                logger.info(f"Loaded {disease} pipeline successfully")
-            else:
-                logger.warning(f"Liver disease pipeline not found, creating mock model")
-                feature_names = EXPECTED_FEATURES.get(disease, [])
-                if feature_names:
-                    model, preprocessor = create_mock_model_and_preprocessor(disease, feature_names)
-                    from sklearn.pipeline import Pipeline
-                    MODELS[disease] = Pipeline([("preprocessor", preprocessor), ("model", model)])
-
-        elif disease in ["covid_symptoms", "breast_cancer"]:
-            if os.path.exists(path):
-                MODELS[disease] = joblib.load(path)
-
-                # Load feature order if available
-                if os.path.exists(FEATURE_ORDER_PATHS.get(disease, "")):
-                    FEATURE_ORDERS[disease] = joblib.load(FEATURE_ORDER_PATHS[disease])
-                    logger.info(f"Loaded {disease} model and feature order successfully")
-                else:
-                    logger.warning(f"Feature order file missing for {disease}")
-
-                # Load preprocessor (only for breast_cancer)
-                if disease == "breast_cancer" and os.path.exists(PREPROCESSOR_PATHS.get(disease, "")):
-                    PREPROCESSORS[disease] = joblib.load(PREPROCESSOR_PATHS[disease])
-            else:
-                logger.warning(f"{disease} model not found, creating mock model")
-
-        else:
-            model_exists = os.path.exists(path)
-            preprocessor_exists = os.path.exists(PREPROCESSOR_PATHS.get(disease, ""))
-
-            if model_exists and preprocessor_exists:
-                MODELS[disease] = joblib.load(path)
-                PREPROCESSORS[disease] = joblib.load(PREPROCESSOR_PATHS[disease])
-                logger.info(f"Loaded {disease} model and preprocessor successfully")
-            else:
-                logger.warning(f"Model files not found for {disease}, creating mock model")
-                feature_names = EXPECTED_FEATURES.get(disease, [])
-                if feature_names:
-                    model, preprocessor = create_mock_model_and_preprocessor(disease, feature_names)
-                    MODELS[disease] = model
-                    PREPROCESSORS[disease] = preprocessor
-
-    except Exception as e:
-        logger.error(f"Error loading {disease} model: {str(e)}")
-
-
-# Load image models
-for disease, path in MODEL_PATHS.items():
-    if disease.endswith("_image"):
-        try:
-            if os.path.exists(path):
-                MODELS[disease] = tf.keras.models.load_model(path)
-                logger.info(f"Loaded {disease} image model successfully")
-            else:
-                logger.warning(f"Image model not found: {path}")
-        except Exception as e:
-            logger.error(f"Error loading {disease} image model: {str(e)}")
-
-# Load image models and unified multimodal model
     for disease, path in MODEL_PATHS.items():
-        if disease != 'unified_multimodal':
-            continue
         try:
-            if os.path.exists(path):
-                MODELS[disease] = tf.keras.models.load_model(path)
-                logger.info(f"Loaded {disease} model successfully")
+            if disease.endswith("_image") or disease == "unified_multimodal":
+                MODELS[disease] = load_file(path, is_keras=True)
+                logger.info(f"Loaded {disease} keras model successfully")
+
+            elif disease == "liver_disease":
+                MODELS[disease] = load_file(path, is_keras=False)
+                logger.info(f"Loaded {disease} pipeline successfully")
+
+            elif disease in ["covid_symptoms", "breast_cancer"]:
+                MODELS[disease] = load_file(path)
+
+                if disease in FEATURE_ORDER_PATHS:
+                    FEATURE_ORDERS[disease] = load_file(FEATURE_ORDER_PATHS[disease])
+
+                if disease in PREPROCESSOR_PATHS:
+                    PREPROCESSORS[disease] = load_file(PREPROCESSOR_PATHS[disease])
+
+                logger.info(f"Loaded {disease} model + metadata")
+
             else:
-                logger.warning(f"Model file not found: {path}")
+                MODELS[disease] = load_file(path)
+                if disease in PREPROCESSOR_PATHS:
+                    PREPROCESSORS[disease] = load_file(PREPROCESSOR_PATHS[disease])
+                logger.info(f"Loaded {disease} model + preprocessor")
+
         except Exception as e:
-            logger.error(f"Error loading {disease} model: {str(e)}")
+            logger.error(f"Error loading {disease} from {path}: {str(e)}")
+            feature_names = EXPECTED_FEATURES.get(disease, [])
+            if feature_names:
+                model, preprocessor = create_mock_model_and_preprocessor(disease, feature_names)
+                MODELS[disease] = model
+                PREPROCESSORS[disease] = preprocessor
+                logger.warning(f"Using mock model for {disease}")
 
 
 # Load models when the module is imported
@@ -358,57 +366,105 @@ def predict_breast_cancer():
 @prediction_bp.route('/predict/kidney_disease', methods=['POST'])
 @cross_origin()
 def predict_kidney_disease():
-    """Predict kidney disease based on patient data"""
     try:
         data = request.get_json()
         logger.info(f"Received kidney disease prediction request: {data}")
-        
-        # Expected features for kidney disease prediction
-        features = ['age', 'bp', 'sg', 'al', 'su', 'rbc', 'pc', 'pcc', 'ba', 'bgr', 
-                   'bu', 'sc', 'sod', 'pot', 'hemo', 'pcv', 'wc', 'rc', 'htn', 'dm', 
-                   'cad', 'appet', 'pe', 'ane']
-        
-        # Validate input data
-        missing_features = [f for f in features if f not in data or data[f] is None]
+
+        # Map API keys to training feature names
+        feature_mapping = {
+            'bp': 'blood_pressure',
+            'sg': 'specific_gravity',
+            'al': 'albumin',
+            'su': 'sugar',
+            'rbc': 'red_blood_cells',
+            'pc': 'pus_cell',
+            'pcc': 'pus_cell_clumps',
+            'ba': 'bacteria',
+            'bgr': 'blood_glucose_random',
+            'bu': 'blood_urea',
+            'sc': 'serum_creatinine',
+            'sod': 'sodium',
+            'pot': 'potassium',
+            'hemo': 'haemoglobin',
+            'pcv': 'packed_cell_volume',
+            'wc': 'white_blood_cell_count',
+            'rc': 'red_blood_cell_count',
+            'htn': 'hypertension',
+            'dm': 'diabetes_mellitus',
+            'cad': 'coronary_artery_disease',
+            'appet': 'appetite',
+            'pe': 'peda_edema',
+            'ane': 'aanemia'
+        }
+
+        expected_features = [
+            'age', 'blood_pressure', 'specific_gravity', 'albumin', 'sugar',
+            'red_blood_cells', 'pus_cell', 'pus_cell_clumps', 'bacteria',
+            'blood_glucose_random', 'blood_urea', 'serum_creatinine', 'sodium',
+            'potassium', 'haemoglobin', 'packed_cell_volume', 'white_blood_cell_count',
+            'red_blood_cell_count', 'hypertension', 'diabetes_mellitus',
+            'coronary_artery_disease', 'appetite', 'peda_edema', 'aanemia'
+        ]
+
+        # Validate required features
+        short_keys = list(feature_mapping.keys()) + ["age"]
+        missing_features = [f for f in short_keys if f not in data or data[f] is None]
         if missing_features:
             return jsonify({
-                'error': f'Missing required features: {missing_features}',
-                'expected_features': features,
-                'received_data': list(data.keys()) if data else []
+                "error": f"Missing required features: {missing_features}",
+                "expected_features": short_keys,
+                "received_data": list(data.keys())
             }), 400
-        
-        # Create DataFrame from input data
-        input_data = {feature: data[feature] for feature in features}
-        input_df = pd.DataFrame([input_data])
-        
-        # Check if model and preprocessor are available
-        if 'kidney_disease' not in MODELS:
-            return jsonify({'error': 'Kidney disease model not available'}), 500
-        
-        if 'kidney_disease' not in PREPROCESSORS:
-            return jsonify({'error': 'Kidney disease preprocessor not available'}), 500
-        
-        # Preprocess the data
-        X_processed = PREPROCESSORS['kidney_disease'].transform(input_df)
-        
-        # Make prediction
-        prediction = MODELS['kidney_disease'].predict(X_processed)[0]
-        probability = MODELS['kidney_disease'].predict_proba(X_processed)[0]
-        
+
+        # Separate numerical & categorical values
+        numeric_features = [
+            "age", "blood_pressure", "specific_gravity", "albumin", "sugar",
+            "blood_glucose_random", "blood_urea", "serum_creatinine", "sodium",
+            "potassium", "haemoglobin", "packed_cell_volume",
+            "white_blood_cell_count", "red_blood_cell_count"
+        ]
+
+        mapped_data = {}
+        for key, value in data.items():
+            mapped_key = feature_mapping.get(key, key)
+            if mapped_key in numeric_features:
+                try:
+                    mapped_data[mapped_key] = float(value)
+                except (ValueError, TypeError):
+                    mapped_data[mapped_key] = np.nan
+            else:
+                mapped_data[mapped_key] = str(value).strip().lower()  # keep categorical as string
+
+        # Create DataFrame
+        input_df = pd.DataFrame([[mapped_data.get(f, np.nan) for f in expected_features]], columns=expected_features)
+
+        if "kidney_disease" not in MODELS or "kidney_disease" not in PREPROCESSORS:
+            return jsonify({"error": "Kidney disease model or preprocessor not available"}), 500
+
+        # Transform safely
+        X_processed = PREPROCESSORS["kidney_disease"].transform(input_df)
+
+        model = MODELS["kidney_disease"]
+        prediction = model.predict(X_processed)[0]
+        probability = model.predict_proba(X_processed)[0]
+
         return jsonify({
-            'prediction': int(prediction),
-            'probability': {
-                'no_kidney_disease': float(probability[0]),
-                'kidney_disease': float(probability[1])
+            "prediction": int(prediction),
+            "probability": {
+                "no_kidney_disease": float(probability[1]),
+                "kidney_disease": float(probability[0])
             },
-            'confidence': float(max(probability)),
-            'risk_level': 'High' if prediction == 1 else 'Low',
-            'recommendation': 'Consult a nephrologist for further evaluation' if prediction == 1 else 'Continue regular health monitoring'
+            "confidence": float(max(probability)),
+            "risk_level": "High" if prediction == 0 else "Low",
+            "recommendation": (
+                "Consult a nephrologist for further evaluation"
+                if prediction == 0 else "Continue regular health monitoring"
+            )
         })
-            
+
     except Exception as e:
         logger.error(f"Error in kidney disease prediction: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # Include other prediction endpoints from the original file
 @prediction_bp.route('/predict/diabetes', methods=['POST'])
@@ -537,79 +593,90 @@ def predict_covid_symptoms():
 def predict_chest_xray():
     """Predict disease from chest X-ray image"""
     try:
-        data = request.get_json()
-        
-        if 'image' not in data or 'model_type' not in data:
-            return jsonify({'error': 'Image and model_type are required'}), 400
-        
-        model_type = data['model_type']  # 'pneumonia' or 'covid'
-        image_data = data['image']
-        
+        data = request.get_json(silent=True)
+
+        if not data:
+            return jsonify({"error": "No JSON payload received"}), 400
+
+        if "image" not in data or "model_type" not in data:
+            return jsonify({"error": "Fields 'image' and 'model_type' are required"}), 400
+
+        model_type = data["model_type"].strip().lower()
+        image_data = data["image"]
+
         # Decode base64 image
-        if image_data.startswith('data:image'):
-            image_data = image_data.split(',')[1]
-        
-        image_bytes = base64.b64decode(image_data)
-        image = Image.open(io.BytesIO(image_bytes))
-        
-        # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        # Resize image based on model requirements
-        if model_type == 'pneumonia':
-            target_size = (150, 150)
-            model_key = 'pneumonia_image'
-        elif model_type == 'covid':
+        try:
+            if image_data.startswith("data:image"):
+                image_data = image_data.split(",")[1]
+            image_bytes = base64.b64decode(image_data)
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        except Exception as img_err:
+            logger.error(f"Image decoding failed: {img_err}")
+            return jsonify({"error": f"Invalid image data: {str(img_err)}"}), 400
+
+        # Choose model
+        if model_type == "pneumonia":
             target_size = (224, 224)
-            model_key = 'covid_image'
+            model_key = "pneumonia_image"
+        elif model_type == "covid":
+            target_size = (224, 224)
+            model_key = "covid_image"
         else:
-            return jsonify({'error': 'Invalid model_type. Use "pneumonia" or "covid"'}), 400
-        
+            return jsonify({"error": f"Invalid model_type '{model_type}'"}), 400
+
+        # Ensure model is loaded
+        model = MODELS.get(model_key)
+        if model is None:
+            return jsonify({"error": f"{model_type} model not available"}), 500
+
+        # Preprocess
         image = image.resize(target_size)
-        
-        # Convert to numpy array and normalize
-        img_array = np.array(image) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        # Make prediction
-        if model_key in MODELS:
-            prediction = MODELS[model_key].predict(img_array)[0]
-            
-            if model_type == 'pneumonia':
-                # Binary classification for pneumonia
-                confidence = float(prediction[0])
-                predicted_class = 'PNEUMONIA' if confidence > 0.5 else 'NORMAL'
-                
-                return jsonify({
-                    'prediction': predicted_class,
-                    'confidence': confidence if predicted_class == 'PNEUMONIA' else 1 - confidence,
-                    'probabilities': {
-                        'NORMAL': float(1 - confidence),
-                        'PNEUMONIA': float(confidence)
-                    }
-                })
-            
-            elif model_type == 'covid':
-                # Multi-class classification for COVID
-                class_names = ['COVID', 'NORMAL', 'VIRAL_PNEUMONIA']
-                predicted_class_idx = np.argmax(prediction)
-                predicted_class = class_names[predicted_class_idx]
-                confidence = float(prediction[predicted_class_idx])
-                
-                probabilities = {class_names[i]: float(prediction[i]) for i in range(len(class_names))}
-                
-                return jsonify({
-                    'prediction': predicted_class,
-                    'confidence': confidence,
-                    'probabilities': probabilities
-                })
-        else:
-            return jsonify({'error': f'{model_type} model not available'}), 500
-            
+        img_array = np.array(image, dtype=np.float32) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)  # Keep 4D shape
+
+        # Run prediction
+        try:
+            prediction = model.predict(img_array)[0]
+        except Exception as pred_err:
+            logger.error(f"Model prediction failed: {pred_err}")
+            return jsonify({"error": f"Prediction failed: {str(pred_err)}"}), 500
+
+        # Postprocess results
+        if model_type == "pneumonia":
+            confidence = float(prediction[0])
+            predicted_class = "PNEUMONIA" if confidence > 0.5 else "NORMAL"
+
+            return jsonify({
+                "prediction": predicted_class,
+                "confidence": confidence if predicted_class == "PNEUMONIA" else 1 - confidence,
+                "probabilities": {
+                    "NORMAL": float(1 - confidence),
+                    "PNEUMONIA": float(confidence)
+                }
+            })
+
+        elif model_type == "covid":
+            class_names = ["NORMAL", "COVID"]
+            prob_normal = float(prediction[0])
+            prob_covid = float(prediction[1])
+
+            predicted_class = class_names[1] if prob_covid > prob_normal else class_names[0]
+            confidence = max(prob_normal, prob_covid)
+
+            return jsonify({
+                "prediction": predicted_class,
+                "confidence": confidence,
+                "probabilities": {
+                    "NORMAL": prob_normal,
+                    "COVID": prob_covid
+                }
+            })
+
     except Exception as e:
-        logger.error(f"Error in chest X-ray prediction: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"Error in chest X-ray prediction: {e}\n{tb}")
+        return jsonify({"error": str(e), "traceback": tb}), 500
 
 @prediction_bp.route('/predict/multimodal', methods=['POST'])
 @cross_origin()
